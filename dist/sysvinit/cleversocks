@@ -1,0 +1,84 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          cleversocks
+# Required-Start:    $network $remote_fs $syslog
+# Required-Stop:     $network $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: CleverSocks SOCKS5 Proxy
+# Description:       Multithreaded, small, efficient SOCKS5 server
+### END INIT INFO
+
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+DAEMON=/usr/bin/cleversocks
+NAME=cleversocks
+DESC="CleverSocks SOCKS5 Proxy"
+PIDFILE=/var/run/cleversocks.pid
+CONFIGFILE=/etc/cleversocks/config.yaml
+DAEMON_USER=cleversocks
+DAEMON_GROUP=cleversocks
+
+# Read defaults file if present
+[ -r /etc/default/cleversocks ] && . /etc/default/cleversocks
+
+DAEMON_ARGS="-c ${CONFIGFILE}"
+
+. /lib/lsb/init-functions
+
+do_start() {
+    start-stop-daemon --start --quiet --pidfile "$PIDFILE" \
+        --make-pidfile --background \
+        --chuid "${DAEMON_USER}:${DAEMON_GROUP}" \
+        --exec "$DAEMON" -- $DAEMON_ARGS \
+        || return 2
+}
+
+do_stop() {
+    start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 \
+        --pidfile "$PIDFILE" --exec "$DAEMON"
+    RETVAL="$?"
+    rm -f "$PIDFILE"
+    return "$RETVAL"
+}
+
+case "$1" in
+    start)
+        log_daemon_msg "Starting $DESC" "$NAME"
+        do_start
+        case "$?" in
+            0|1) log_end_msg 0 ;;
+            2)   log_end_msg 1 ;;
+        esac
+        ;;
+    stop)
+        log_daemon_msg "Stopping $DESC" "$NAME"
+        do_stop
+        case "$?" in
+            0|1) log_end_msg 0 ;;
+            2)   log_end_msg 1 ;;
+        esac
+        ;;
+    restart|force-reload)
+        log_daemon_msg "Restarting $DESC" "$NAME"
+        do_stop
+        case "$?" in
+            0|1)
+                do_start
+                case "$?" in
+                    0) log_end_msg 0 ;;
+                    *) log_end_msg 1 ;;
+                esac
+                ;;
+            *)
+                log_end_msg 1
+                ;;
+        esac
+        ;;
+    status)
+        status_of_proc -p "$PIDFILE" "$DAEMON" "$NAME" && exit 0 || exit $?
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|force-reload|status}" >&2
+        exit 3
+        ;;
+esac

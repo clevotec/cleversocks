@@ -13,5 +13,37 @@ contents:
     dst: /usr/bin/cleversocks
     file_info:
       mode: 0755
+
+  - src: ./dist/config/config.yaml
+    dst: /etc/cleversocks/config.yaml
+    type: config|noreplace
+    file_info:
+      mode: 0640
+
+  - src: ./dist/systemd/cleversocks.service
+    dst: /usr/lib/systemd/system/cleversocks.service
+    file_info:
+      mode: 0644
+
+  - src: ./dist/sysvinit/cleversocks
+    dst: /etc/init.d/cleversocks
+    file_info:
+      mode: 0755
+
+scripts:
+  postinstall: |
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl daemon-reload
+    fi
+  preremove: |
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl stop cleversocks 2>/dev/null || true
+      systemctl disable cleversocks 2>/dev/null || true
+    fi
+  postremove: |
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl daemon-reload
+    fi
+
 rpm:
   group: Applications/Internet
