@@ -1,0 +1,14 @@
+[package]
+name = "cleversocks"
+version = "1.0.5"
+edition = "2021"
+description = "CleverSocks - multithreaded, small, efficient SOCKS5 server"
+license = "MIT"
+
+[dependencies]
+socket2 = { version = "0.5", features = ["all"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

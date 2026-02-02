@@ -1,0 +1,17 @@
+name: cleversocks
+arch: "${NFPM_ARCH}"
+platform: linux
+version: "${VERSION}"
+section: net
+priority: optional
+maintainer: clevotec
+description: CleverSocks - multithreaded, small, efficient SOCKS5 server
+homepage: https://github.com/clevotec/cleversocks
+license: MIT
+contents:
+  - src: ./dist/cleversocks
+    dst: /usr/bin/cleversocks
+    file_info:
+      mode: 0755
+rpm:
+  group: Applications/Internet
