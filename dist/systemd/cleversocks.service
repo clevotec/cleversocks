@@ -1,0 +1,44 @@
+[Unit]
+Description=CleverSocks SOCKS5 Proxy
+Documentation=man:cleversocks(1)
+Documentation=https://github.com/clevotec/cleversocks
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cleversocks -c /etc/cleversocks/config.yaml
+Restart=on-failure
+RestartSec=5
+
+# Resource limits
+LimitNOFILE=65536
+
+# Security hardening
+DynamicUser=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
+LockPersonality=true
+
+# Allow binding to privileged ports (< 1024) if needed.
+# Remove this line if only using ports >= 1024.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Writable paths for runtime data
+ReadOnlyPaths=/
+ReadWritePaths=/run/cleversocks
+
+[Install]
+WantedBy=multi-user.target
