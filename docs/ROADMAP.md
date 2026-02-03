@@ -224,7 +224,102 @@ New security capabilities that plug into the trait system.
 
 ---
 
-## Phase 8 — Protocol Completeness
+## Phase 8 — Proxy Pool & proxybroker2 Integration
+
+Rotating upstream proxy pool for load distribution, anonymity rotation,
+and integration with proxy scrapers like
+[proxybroker2](https://github.com/bluet/proxybroker2).
+
+### Core Implementation
+
+- [ ] **`ProxyPool` trait** — Define in `src/pool/mod.rs`:
+  - `select() -> Option<UpstreamProxy>` — get next proxy
+  - `mark_failed()` / `mark_success()` — health tracking
+  - `reload()` — refresh from source
+  - `len()` — available proxy count
+
+- [ ] **`UpstreamProxy` struct** — Proxy metadata:
+  - host, port, protocol (SOCKS5/SOCKS4/HTTP)
+  - optional auth credentials
+  - optional metadata (country, response time, error rate)
+
+- [ ] **`StaticPool`** — Fixed list of proxies from YAML config
+
+- [ ] **`FilePool`** — Load proxies from file with auto-reload
+
+### Format Parsers (proxybroker2 compatibility)
+
+- [ ] **JSON parser** — Parse proxybroker2 `--format json` output:
+  ```json
+  [{"host": "1.2.3.4", "port": 1080,
+    "types": [{"type": "SOCKS5", "level": "High"}],
+    "avg_resp_time": 1.2}]
+  ```
+
+- [ ] **Text parser** — Parse `host:port` format (one per line)
+
+- [ ] **Extended text parser** — Parse `protocol://[user:pass@]host:port`
+
+- [ ] **Auto-detection** — Detect format from file content (JSON array
+      vs. text lines)
+
+### Selection Strategies
+
+- [ ] **Round-robin** — Cycle through proxies sequentially
+- [ ] **Random** — Uniform random selection
+- [ ] **Least-connections** — Track active connections per proxy
+- [ ] **Fastest** — Prefer proxies with lowest `avg_resp_time`
+- [ ] **Weighted random** — Weight by inverse response time / error rate
+
+### Protocol Filtering
+
+- [ ] Filter loaded proxies by protocol type (e.g., only SOCKS5)
+- [ ] Filter by country code (if metadata available)
+- [ ] Filter by anonymity level (if metadata available)
+
+### Health Checking
+
+- [ ] **Passive health** — Track success/failure from actual requests
+- [ ] **Active health** — Periodic background connectivity checks
+- [ ] **Failure threshold** — Remove proxy after N consecutive failures
+- [ ] **Recovery** — Re-add proxy after reload if it reappears
+
+### Integration
+
+- [ ] **`PooledConnector`** — `Connector` implementation that wraps
+      `DirectConnector` and routes through pool-selected upstream
+
+- [ ] **Forwarding rule precedence** — Explicit forwarding rules take
+      priority over pool routing
+
+- [ ] **YAML config section** — `proxy_pool:` with all options:
+  ```yaml
+  proxy_pool:
+    enabled: true
+    source: /var/lib/cleversocks/proxies.json
+    format: auto
+    protocol_filter: [socks5]
+    strategy: round_robin
+    reload_interval: 300
+    health_check:
+      enabled: true
+      interval: 60
+      timeout: 5
+      max_failures: 3
+  ```
+
+- [ ] **Hot reload** — Reload proxy list on SIGHUP or timer without
+      dropping active connections
+
+### Documentation
+
+- [ ] Add proxybroker2 integration example to docs
+- [ ] Document cron setup for periodic proxy scraping
+- [ ] Document all supported input formats
+
+---
+
+## Phase 9 — Protocol Completeness
 
 Implement remaining SOCKS5 commands and compatibility layers.
 
@@ -245,7 +340,7 @@ Implement remaining SOCKS5 commands and compatibility layers.
 
 ---
 
-## Phase 9 — Performance
+## Phase 10 — Performance
 
 Major architectural shift from threads to async, plus network
 optimizations.
@@ -273,11 +368,12 @@ optimizations.
 
 ---
 
-## Phase 10 — Observability & Advanced Networking
+## Phase 11 — Observability & Advanced Networking
 
 - [ ] **Metrics endpoint** — Minimal HTTP server on a management port.
       Prometheus text format. Counters: active connections, total
-      connections, bytes in/out, auth success/fail, ACL denials.
+      connections, bytes in/out, auth success/fail, ACL denials,
+      proxy pool stats (per-upstream success/fail/latency).
 - [ ] **Health check endpoint** — `/healthz` on the metrics port.
       Returns 200 if the listener is alive.
 - [ ] **PROXY protocol v1/v2** — Preserve client IP behind load
