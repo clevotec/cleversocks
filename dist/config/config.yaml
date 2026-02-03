@@ -1,0 +1,126 @@
+# CleverSocks default configuration
+#
+# This file is shipped with system packages and provides sane defaults
+# for production deployments. Adjust to your environment.
+#
+# Usage:
+#   cleversocks -c /etc/cleversocks/config.yaml
+#
+# Credentials can be supplied via environment variables:
+#   export CLEVERSOCKS_PASSWORD="your-secret"
+#   cleversocks -c /etc/cleversocks/config.yaml
+
+# ---------- Network ----------
+
+# Listen address. Default 127.0.0.1 (loopback only).
+# Set to 0.0.0.0 or :: to accept connections from all interfaces.
+listen: 127.0.0.1
+port: 1080
+
+# Bind outgoing connections to a specific IP (optional).
+# bind_address: 192.168.1.100
+
+# ---------- Authentication ----------
+
+auth:
+  # List of authorized users. Remove this section to disable auth
+  # (not recommended for non-loopback listeners).
+  users:
+    - username: proxy
+      password: ${CLEVERSOCKS_PASSWORD}
+
+  # Auth-once: after successful authentication, whitelist the client IP
+  # so subsequent connections from the same IP skip auth.
+  # Useful for clients that don't support SOCKS5 auth (e.g., Firefox).
+  auth_once: false
+
+  # Maximum number of IPs in the auth-once whitelist (0 = unlimited).
+  # auth_once_max: 10000
+
+  # TTL in seconds for auth-once whitelist entries (0 = never expire).
+  # auth_once_ttl: 3600
+
+  # Static IP whitelist: these IPs bypass authentication entirely.
+  whitelist: []
+    # - 127.0.0.1
+    # - ::1
+
+# ---------- Limits ----------
+
+# Maximum concurrent connections (0 = unlimited).
+max_connections: 10000
+
+# Idle exit timeout in seconds. Server exits after this many seconds
+# with no active connections. Omit or set to null to wait forever.
+# idle_timeout: 300
+
+# ---------- Logging ----------
+
+# Log level: error, warn, info, debug, trace
+log_level: info
+
+# Suppress all log output (equivalent to log_level: error).
+quiet: false
+
+# Log output format: text or json
+# log_format: text
+
+# ---------- Access Control ----------
+
+# ACL rules are evaluated top-to-bottom. First match wins.
+# Default action applies when no rule matches.
+acl:
+  default: allow
+  rules:
+    # Block access to cloud instance metadata endpoints
+    - { action: deny, cidr: "169.254.169.254/32" }
+
+    # Block access to private networks (RFC 1918 / RFC 4193)
+    - { action: deny, cidr: "10.0.0.0/8" }
+    - { action: deny, cidr: "172.16.0.0/12" }
+    - { action: deny, cidr: "192.168.0.0/16" }
+    - { action: deny, cidr: "127.0.0.0/8" }
+    - { action: deny, cidr: "::1/128" }
+    - { action: deny, cidr: "fc00::/7" }
+
+    # Block SMTP to prevent spam relay
+    - { action: deny, ports: [25, 465, 587] }
+
+# ---------- Forwarding Rules ----------
+
+# Route matching connections through upstream SOCKS5 proxies.
+# forwarding:
+#   - match: "example.com:443"
+#     upstream: "proxy.internal:1080"
+#     remote: "target.com:443"
+#     upstream_auth:
+#       username: chain_user
+#       password: chain_pass
+
+# ---------- Proxy Pool (proxybroker2 integration) ----------
+
+# Rotating pool of upstream proxies. Useful with proxy scrapers like
+# proxybroker2 (https://github.com/bluet/proxybroker2).
+#
+# Example: scrape proxies and save to file:
+#   python -m proxybroker grab --types SOCKS5 --lvl High --limit 100 \
+#       --format json --outfile /var/lib/cleversocks/proxies.json
+#
+# proxy_pool:
+#   enabled: true
+#   source: /var/lib/cleversocks/proxies.json
+#   format: auto                  # auto | json | text
+#   protocol_filter: [socks5]     # only use SOCKS5 proxies
+#   strategy: round_robin         # round_robin | random | least_connections | fastest
+#   reload_interval: 300          # seconds, 0 = no auto-reload
+#   health_check:
+#     enabled: true
+#     interval: 60                # seconds between checks
+#     timeout: 5                  # seconds
+#     max_failures: 3             # remove after N consecutive failures
+
+# ---------- TLS (future) ----------
+
+# tls:
+#   cert: /etc/cleversocks/cert.pem
+#   key: /etc/cleversocks/key.pem
