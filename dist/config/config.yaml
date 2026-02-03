@@ -97,6 +97,28 @@ acl:
 #       username: chain_user
 #       password: chain_pass
 
+# ---------- Proxy Pool (proxybroker2 integration) ----------
+
+# Rotating pool of upstream proxies. Useful with proxy scrapers like
+# proxybroker2 (https://github.com/bluet/proxybroker2).
+#
+# Example: scrape proxies and save to file:
+#   python -m proxybroker grab --types SOCKS5 --lvl High --limit 100 \
+#       --format json --outfile /var/lib/cleversocks/proxies.json
+#
+# proxy_pool:
+#   enabled: true
+#   source: /var/lib/cleversocks/proxies.json
+#   format: auto                  # auto | json | text
+#   protocol_filter: [socks5]     # only use SOCKS5 proxies
+#   strategy: round_robin         # round_robin | random | least_connections | fastest
+#   reload_interval: 300          # seconds, 0 = no auto-reload
+#   health_check:
+#     enabled: true
+#     interval: 60                # seconds between checks
+#     timeout: 5                  # seconds
+#     max_failures: 3             # remove after N consecutive failures
+
 # ---------- TLS (future) ----------
 
 # tls:

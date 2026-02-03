@@ -93,7 +93,14 @@ src/
 ├── connect/
 │   ├── mod.rs                 Connector trait
 │   ├── direct.rs              Direct TCP connect with bind support
-│   └── upstream.rs            SOCKS5 proxy chaining
+│   ├── upstream.rs            SOCKS5 proxy chaining
+│   └── pooled.rs              Connector using ProxyPool
+│
+├── pool/
+│   ├── mod.rs                 ProxyPool trait, UpstreamProxy struct
+│   ├── static_pool.rs         Fixed list from config
+│   ├── file_pool.rs           Load from file (JSON/text formats)
+│   └── parser.rs              Proxybroker2 format parsers
 │
 ├── forward.rs                 Forwarding rule parsing (mostly unchanged)
 │
@@ -223,6 +230,89 @@ pub trait AccessControl: Send + Sync {
 - `RuleBasedAcl` — CIDR + port + domain allow/deny lists loaded from
   config.
 
+### ProxyPool
+
+```rust
+// src/pool/mod.rs
+
+pub struct UpstreamProxy {
+    pub host: String,
+    pub port: u16,
+    pub protocol: ProxyProtocol,      // Socks5, Socks4, HttpConnect
+    pub auth: Option<ProxyAuth>,
+    pub country: Option<String>,
+    pub avg_resp_time: Option<f64>,
+    pub error_rate: Option<f64>,
+}
+
+pub enum SelectionStrategy {
+    RoundRobin,
+    Random,
+    LeastConnections,
+    Fastest,
+    WeightedRandom,
+}
+
+pub trait ProxyPool: Send + Sync {
+    /// Select the next upstream proxy based on the configured strategy.
+    fn select(&self) -> Option<UpstreamProxy>;
+
+    /// Mark a proxy as failed (for health tracking).
+    fn mark_failed(&self, proxy: &UpstreamProxy);
+
+    /// Mark a proxy as successful (for health tracking).
+    fn mark_success(&self, proxy: &UpstreamProxy, response_time: Duration);
+
+    /// Reload the proxy list from the configured source.
+    fn reload(&self) -> io::Result<usize>;
+
+    /// Number of currently available proxies.
+    fn len(&self) -> usize;
+}
+```
+
+**Shipped implementations:**
+- `StaticPool` — fixed list of proxies from config.
+- `FilePool` — loads proxies from a file, supports multiple formats,
+  optional periodic reload.
+
+**Supported input formats (for proxybroker2 compatibility):**
+
+1. **JSON format** — proxybroker2 `--format json` output:
+   ```json
+   [
+     {
+       "host": "10.0.0.1",
+       "port": 8080,
+       "types": [{"type": "SOCKS5", "level": "High"}],
+       "country": {"code": "US"},
+       "avg_resp_time": 1.12,
+       "error_rate": 0.05
+     }
+   ]
+   ```
+
+2. **Text format** — proxybroker2 `--format text` or simple proxy lists:
+   ```
+   10.0.0.1:8080
+   10.0.0.2:1080
+   socks5://user:pass@10.0.0.3:1080
+   ```
+
+3. **Extended text format** — protocol prefix and optional auth:
+   ```
+   socks5://10.0.0.1:1080
+   socks4://10.0.0.2:1080
+   http://10.0.0.3:8080
+   socks5://user:pass@10.0.0.4:1080
+   ```
+
+**How to add a new proxy source:**
+1. Create `src/pool/my_source.rs`.
+2. Implement `ProxyPool` for your struct.
+3. Add config variant to YAML schema.
+4. Wire it in `main.rs`.
+
 ---
 
 ## Config System
@@ -284,6 +374,20 @@ forwarding:
     upstream_auth:
       username: chain_user
       password: chain_pass
+
+# Proxy pool for upstream rotation (proxybroker2 integration)
+proxy_pool:
+  enabled: false
+  source: /var/lib/cleversocks/proxies.json  # or proxies.txt
+  format: auto                # auto | json | text
+  protocol_filter: [socks5]   # only use SOCKS5 proxies from the list
+  strategy: round_robin       # round_robin | random | least_connections | fastest
+  reload_interval: 300        # seconds, 0 = no auto-reload
+  health_check:
+    enabled: true
+    interval: 60              # seconds between health checks
+    timeout: 5                # seconds
+    max_failures: 3           # remove proxy after N consecutive failures
 
 # tls:                     # (future)
 #   cert: /etc/cleversocks/cert.pem
@@ -605,6 +709,88 @@ modules.
 4. Config: `rate_limit.connections_per_ip: 10`,
    `rate_limit.burst: 20`.
 5. No changes to handshake, auth, connect, or relay.
+
+### Example: Using proxybroker2 Scraped Proxies
+
+This example shows how to use CleverSocks with
+[proxybroker2](https://github.com/bluet/proxybroker2) to route traffic
+through a rotating pool of public SOCKS5 proxies.
+
+**Step 1: Scrape proxies with proxybroker2**
+
+```bash
+# Install proxybroker2
+pip install proxybroker2
+
+# Scrape SOCKS5 proxies and save as JSON
+python -m proxybroker grab --types SOCKS5 --lvl High --limit 100 \
+    --format json --outfile /var/lib/cleversocks/proxies.json
+```
+
+**Step 2: Configure CleverSocks to use the proxy pool**
+
+```yaml
+# /etc/cleversocks/config.yaml
+
+listen: 127.0.0.1
+port: 1080
+
+proxy_pool:
+  enabled: true
+  source: /var/lib/cleversocks/proxies.json
+  format: json
+  protocol_filter: [socks5]
+  strategy: fastest
+  reload_interval: 300
+  health_check:
+    enabled: true
+    interval: 60
+    timeout: 5
+    max_failures: 3
+```
+
+**Step 3: Set up periodic proxy refresh (cron)**
+
+```cron
+# Refresh proxy list every 5 minutes
+*/5 * * * * python -m proxybroker grab --types SOCKS5 --lvl High \
+    --limit 100 --format json \
+    --outfile /var/lib/cleversocks/proxies.json 2>/dev/null
+```
+
+CleverSocks will automatically reload the proxy list when
+`reload_interval` elapses, picking up new proxies without restart.
+
+**How it works:**
+
+1. When `proxy_pool.enabled` is true, the `PooledConnector` wraps the
+   normal `DirectConnector`.
+2. For each outbound connection, `PooledConnector` calls
+   `pool.select()` to get an upstream proxy.
+3. The connection is established through the selected upstream using
+   SOCKS5 proxy chaining.
+4. Success/failure is reported back to the pool for health tracking.
+5. Failed proxies are removed after `max_failures` consecutive errors.
+6. The pool is periodically refreshed from the source file.
+
+**Integration with forwarding rules:**
+
+Proxy pool and forwarding rules can coexist. Forwarding rules take
+precedence — if a rule matches, its explicit upstream is used. For
+non-matching connections, the pool selects an upstream.
+
+```yaml
+forwarding:
+  # Specific route for internal service
+  - match: "internal.example.com:*"
+    upstream: "corporate-proxy.internal:1080"
+    remote: "internal.example.com:*"
+
+# Everything else goes through the rotating pool
+proxy_pool:
+  enabled: true
+  source: /var/lib/cleversocks/proxies.json
+```
 
 ---
 
