@@ -5,13 +5,21 @@
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::thread;
 use std::time::Duration;
 
-/// Get an OS-assigned free port by binding to port 0.
+/// Global atomic counter for port allocation.
+/// Using a counter instead of bind(0) avoids TOCTOU race conditions
+/// when tests run in parallel — between releasing port 0's ephemeral
+/// assignment and the server binding, another test could grab it.
+/// Start at 30000 to stay well clear of common services and ephemeral ranges.
+static PORT_COUNTER: AtomicU16 = AtomicU16::new(30000);
+
+/// Get a unique port for this test. Each call increments the counter,
+/// guaranteeing no two tests use the same port.
 fn get_free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
+    PORT_COUNTER.fetch_add(1, Ordering::SeqCst)
 }
 
 /// Helper to start cleversocks on a given port with extra args.
