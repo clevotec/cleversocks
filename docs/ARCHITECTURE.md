@@ -1,5 +1,45 @@
 # Architecture Improvement Plan
 
+**Vision:** The nginx of SOCKS proxies — small, fast, secure, reliable.
+
+---
+
+## Design Philosophy
+
+1. **Simplicity over features.** Every feature must justify its existence.
+   If nginx/squid/haproxy does it better, don't add it.
+
+2. **Security by default.** Unsafe configurations warn loudly. Safe
+   configurations work out of the box.
+
+3. **100% test coverage.** Untested code is broken code. Every code path
+   has a test. Every bug fix adds a regression test.
+
+4. **Zero unsafe.** Rust's safety guarantees are non-negotiable. No
+   `unsafe` blocks, no exceptions.
+
+5. **Minimal dependencies.** Each dependency is a liability. Justify
+   every crate. Prefer std when reasonable.
+
+6. **Measure everything.** Performance claims require benchmarks.
+   Security claims require audits. Coverage claims require metrics.
+
+---
+
+## Quality Standards
+
+| Metric | Target | Enforcement |
+|--------|--------|-------------|
+| Test coverage | 100% line | CI blocks merge below threshold |
+| Fuzz testing | No crashes (1M iterations) | CI runs fuzzers on each PR |
+| Clippy | Zero warnings | `cargo clippy -- -D warnings` |
+| Security audit | No high/critical | `cargo-audit` in CI |
+| Binary size | < 500 KB (musl) | CI reports size delta |
+| Unsafe code | Zero blocks | `#![forbid(unsafe_code)]` |
+| Documentation | 100% public API | `cargo doc --deny warnings` |
+
+---
+
 ## Current State
 
 CleverSocks v1.0.5 has five flat modules in `src/`:
@@ -791,6 +831,165 @@ proxy_pool:
   enabled: true
   source: /var/lib/cleversocks/proxies.json
 ```
+
+---
+
+## Testing Strategy
+
+### Test Pyramid
+
+```
+                    ┌─────────────────┐
+                    │   E2E Tests     │  Few, slow, high confidence
+                    │  (real clients) │
+                    ├─────────────────┤
+                    │ Integration     │  Test module boundaries
+                    │ Tests           │  Mock external systems
+                    ├─────────────────┤
+                    │                 │
+                    │   Unit Tests    │  Fast, isolated, comprehensive
+                    │                 │  One test file per source file
+                    │                 │
+                    └─────────────────┘
+```
+
+### Test Organization
+
+```
+tests/
+├── unit/                    # Unit tests (mirror src/ structure)
+│   ├── protocol/
+│   │   ├── socks5_test.rs
+│   │   └── handshake_test.rs
+│   ├── auth/
+│   │   ├── userpass_test.rs
+│   │   └── whitelist_test.rs
+│   └── ...
+├── integration/             # Integration tests
+│   ├── test_auth.rs         # Authentication scenarios
+│   ├── test_protocol.rs     # Protocol compliance
+│   ├── test_relay.rs        # Data transfer
+│   ├── test_errors.rs       # Error handling
+│   └── test_pool.rs         # Proxy pool
+├── fuzz/                    # Fuzz targets
+│   ├── fuzz_socks5_parser.rs
+│   ├── fuzz_credentials.rs
+│   └── fuzz_forward_rules.rs
+├── conformance/             # RFC compliance tests
+│   ├── rfc1928_test.rs      # SOCKS5 protocol
+│   └── rfc1929_test.rs      # Username/password auth
+└── benches/                 # Performance benchmarks
+    ├── throughput.rs
+    ├── latency.rs
+    └── concurrency.rs
+```
+
+### Testing Each Trait
+
+Every trait has a corresponding mock for testing:
+
+```rust
+// src/resolver/mod.rs
+pub trait Resolver: Send + Sync {
+    fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>>;
+}
+
+// tests/unit/resolver/mock.rs
+pub struct MockResolver {
+    pub responses: HashMap<(String, u16), io::Result<Vec<SocketAddr>>>,
+}
+
+impl Resolver for MockResolver {
+    fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+        self.responses.get(&(host.to_string(), port))
+            .cloned()
+            .unwrap_or_else(|| Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no mock response configured"
+            )))
+    }
+}
+```
+
+This allows testing components in isolation without network I/O.
+
+### Property-Based Testing
+
+Use `proptest` for invariant testing:
+
+```rust
+proptest! {
+    #[test]
+    fn parse_then_serialize_roundtrips(req in connect_request_strategy()) {
+        let bytes = req.to_bytes();
+        let parsed = parse_connect_request(&bytes).unwrap();
+        prop_assert_eq!(req, parsed);
+    }
+
+    #[test]
+    fn pool_select_never_returns_failed_proxy(
+        proxies in vec(proxy_strategy(), 1..100),
+        failures in vec(usize::arbitrary(), 0..50)
+    ) {
+        let pool = FilePool::new(proxies);
+        for idx in failures {
+            if let Some(p) = pool.get(idx % pool.len()) {
+                pool.mark_failed(&p);
+                pool.mark_failed(&p);
+                pool.mark_failed(&p); // 3 failures = removed
+            }
+        }
+        // Select should never return a failed proxy
+        for _ in 0..1000 {
+            if let Some(p) = pool.select() {
+                prop_assert!(pool.is_healthy(&p));
+            }
+        }
+    }
+}
+```
+
+### Fuzz Testing
+
+Every parser has a fuzz target:
+
+```rust
+// fuzz/fuzz_targets/socks5_parser.rs
+#![no_main]
+use libfuzzer_sys::fuzz_target;
+use cleversocks::protocol::socks5::parse_connect_request;
+
+fuzz_target!(|data: &[u8]| {
+    // Should never panic, regardless of input
+    let _ = parse_connect_request(data);
+});
+```
+
+CI runs fuzzers for 10 minutes on each PR. Local development can run
+longer campaigns overnight.
+
+### Benchmark Suite
+
+```rust
+// benches/throughput.rs
+fn bench_relay_throughput(c: &mut Criterion) {
+    let mut group = c.benchmark_group("relay");
+
+    for size in [1024, 16384, 65536, 1048576].iter() {
+        group.throughput(Throughput::Bytes(*size as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(size),
+            size,
+            |b, &size| {
+                b.iter(|| relay_data(size))
+            },
+        );
+    }
+}
+```
+
+Benchmarks run on every release. Results are published in the README
+with comparison against Dante, microsocks, and 3proxy.
 
 ---
 
