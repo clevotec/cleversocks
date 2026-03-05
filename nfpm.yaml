@@ -31,19 +31,9 @@ contents:
       mode: 0755
 
 scripts:
-  postinstall: |
-    if command -v systemctl >/dev/null 2>&1; then
-      systemctl daemon-reload
-    fi
-  preremove: |
-    if command -v systemctl >/dev/null 2>&1; then
-      systemctl stop cleversocks 2>/dev/null || true
-      systemctl disable cleversocks 2>/dev/null || true
-    fi
-  postremove: |
-    if command -v systemctl >/dev/null 2>&1; then
-      systemctl daemon-reload
-    fi
+  postinstall: ./dist/scripts/postinstall.sh
+  preremove: ./dist/scripts/preremove.sh
+  postremove: ./dist/scripts/postremove.sh
 
 rpm:
   group: Applications/Internet
